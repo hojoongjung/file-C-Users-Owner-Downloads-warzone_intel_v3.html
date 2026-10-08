@@ -17,14 +17,14 @@
 | 구동부 | 서보모터 (모델 미정) |
 | 서보 드라이버 | PCA9685 (서보는 여기에 연결, Pi와는 I2C) |
 
-## 개발용 노트북
+## 개발 장비
 
-| 항목 | 사양 |
-| --- | --- |
-| 모델 | MacBook Pro 15-inch, 2019 |
-| CPU | 2.3 GHz 8코어 Intel Core i9 (x86_64, Apple Silicon 아님) |
-| GPU | Intel UHD Graphics 630 1536 MB (NVIDIA/CUDA 없음) |
-| 메모리 | 16GB 2400 MHz DDR4 |
+| 장비 | 사양 | 역할 |
+| --- | --- | --- |
+| ASUS F16 (주 작업용) | NVIDIA RTX 4060 노트북 GPU 8GB, Windows(추정), VMware에 Linux VM 설치됨 | 모델 학습(Windows), HEF 변환(VMware Linux), 코드 편집과 파이 접속 |
+| MacBook Pro 15-inch 2019 (보조) | 2.3GHz 8코어 Intel Core i9, Intel UHD 630, 16GB | 코드 편집과 SSH 정도만. 없어도 된다 |
+
+- 맥북은 최신 도구 지원이 끊기는 중이라 무거운 작업에 쓰지 않는다: macOS Sequoia 15가 마지막이고, PyPI의 PyTorch는 2.2.2, onnxruntime은 1.23.2가 Intel Mac용 마지막 버전이며, Homebrew는 Intel을 Tier 3로 내렸다.
 
 ## 거리 판정 방식 (결정: 크기 등급 분류)
 
@@ -81,15 +81,65 @@
 - 접근 속도로 "몇 초 뒤 도착" 계산: 크기와 무관하게 구할 수 있지만 거리가 아니고, 제자리 비행이면 안 된다. 보조 조건으로만 쓸 수 있다.
 - 거울 스테레오, 두 번째 카메라, LiDAR, 레이더: 크기와 무관하게 거리를 잴 수 있지만, 부품 추가 없음 조건 때문에 제외.
 
-## 참고 메모
+## 개발 작업 흐름 (2026-10 조사 + 검증)
 
-- Hailo Dataflow Compiler(모델 → `.hef` 변환)는 x86_64 Linux(Ubuntu) 전용이다. 노트북이 Intel이라 Docker나 Linux VM으로 돌릴 수 있지만, macOS에서 바로 실행되지는 않는다.
-- 노트북에 CUDA GPU가 없어서 모델 학습은 느리다. 학습은 Google Colab 같은 GPU 환경에서 하는 게 낫다.
-- IMX477 초점거리(6mm 렌즈, 픽셀 1.55µm): 4056 폭에서 약 3871px, 2028 폭에서 약 1935px, 640 폭에서 약 611px.
-- IMX477 주요 모드: 4056×3040 10fps, 2028×1520 40fps(2×2 비닝), 2028×1080 50fps, 1332×990 120fps(잘림).
+1. **1단계, 연결 확인:** Hailo가 미리 변환해 둔 Hailo-8용 YOLOv8 HEF로 카메라 → 탐지 → 거리 → 서보 전체 흐름을 먼저 돌린다. COCO 모델이라 드론 항목이 없다(새·비행기·연으로 잡히기도 함).
+   - 다운로드(로그인 불필요): `https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/<v2.18.0 또는 v2.19.0>/hailo8/yolov8s.hef`. 폴더는 꼭 `hailo8`(hailo8l 아님). v2.19.1 폴더는 없다.
+2. **2단계, 드론 전용 모델:** 데이터 수집 → ASUS Windows에서 학습 → VMware Linux에서 HEF 변환 → 파이에 HEF만 교체.
+   - 학습: Windows에서 직접(또는 WSL2). VMware VM은 GPU를 못 쓴다(Workstation에 GPU 패스스루 없음).
+   - Windows 설치 순서: 최신 NVIDIA 드라이버 → PyTorch를 CUDA 인덱스(`--index-url https://download.pytorch.org/whl/cu130`)로 먼저 설치 → 그다음 `ultralytics`. 순서가 바뀌면 CPU용 PyTorch가 깔린다.
+   - 학습 스크립트는 `if __name__ == "__main__":`로 감싼다(Windows 데이터로더). NVIDIA 제어판에서 python.exe의 "CUDA - Sysmem Fallback Policy"를 "Prefer No Sysmem Fallback"으로 설정한다.
+   - 변환: `yolo export model=best.pt format=hailo name=hailo8 imgsz=640 data=...` (ultralytics 8.4.97 이상, Linux x86_64 + DFC wheel 필요). 기본값이 hailo8l이라 `name=hailo8`을 꼭 넣는다. 탐지·분류 모델 둘 다 지원한다.
+   - YOLOv8/YOLO11은 export 때 conf가 HEF 안의 NMS에 고정된다. 작은 드론을 위해 conf를 낮게(약 0.1~0.15) 해서 내보내고 파이에서 거른다.
+   - 보정(calibration) 이미지는 실제 IMX477로 찍은 프레임 1024장 이상을 쓴다(COCO128 금지).
+   - GPU 없이 변환하면 DFC가 최적화 레벨을 0으로 낮출 수 있다. 로그에서 "Reducing optimization level"을 확인한다. Ultralytics는 레벨 2를 명시하지만 CPU에서 유지되는지는 미확인이다. 더 좋은 품질이 필요하면 Ubuntu 22.04를 별도 SSD에 설치해 GPU(CUDA 12.5.1 + cuDNN 9.10)로 변환한다.
+   - DFC 권장 RAM은 16GB 이상(32GB 권장, 공식 가이드는 미확인). VM에는 12GB 정도 + 스왑을 준다.
+   - 변환 후 ONNX와 HEF의 정확도를 비교한다(양자화로 크게 떨어진 사례 있음).
+3. **코드 작성:** ASUS의 VS Code Remote-SSH로 파이에 접속하거나, PC에서 쓰고 git/rsync로 보낸다. 카메라 화면은 파이에서 MJPEG로 스트리밍해 브라우저로 본다.
+
+## Hailo 도구 버전 (가장 중요)
+
+- Hailo-8은 **DFC 3.x / HailoRT 4.x / Model Zoo v2.x** 계열이다. 5.x(DFC, HailoRT, Model Zoo master)는 Hailo-10H/15 전용이라 쓰면 안 된다. Model Zoo는 반드시 v2.x 태그로 받는다.
+- HEF를 만든 DFC 버전과 파이의 HailoRT 버전이 짝이 맞아야 한다. 안 맞으면 파이에서 HEF가 열리지 않는다.
+
+| 파이 HailoRT | DFC | Model Zoo |
+| --- | --- | --- |
+| 4.23.x | 3.33.1 | v2.18 |
+| 4.24.x | 3.34.0 | v2.19.x |
+
+- 순서: 파이에 hailo-all 설치 → `hailortcli fw-control identify`, `dpkg -l | grep -i hailo`로 버전 확인 → 짝이 맞는 DFC를 받는다. 라즈베리파이 OS Trixie의 hailo-all은 4.23일 가능성이 높다(미확인).
+- 동작 확인 후 `apt-mark hold`로 Hailo 패키지를 고정한다(이름은 `dpkg -l`에 나온 그대로). 나중에 `apt full-upgrade`로 버전이 바뀌면 HEF가 안 맞게 된다.
+- DFC wheel은 Hailo Developer Zone(무료 가입)에서 받는다. 2026-09-21 Microchip이 Hailo 인수를 마쳤으므로, 받은 wheel과 문서는 따로 보관한다.
+
+## 라즈베리파이 설정 메모
+
+- OS: Raspberry Pi OS 64비트 Trixie(Python 3.13). Bookworm은 쓰지 않는다. Raspberry Pi Imager에서 호스트 이름, 사용자, Wi-Fi, SSH 키를 미리 설정하면 모니터 없이 쓸 수 있다.
+- Hailo 설치: `sudo apt update && sudo apt full-upgrade -y && sudo rpi-eeprom-update -a` → 재부팅 → `sudo apt install dkms` → `sudo apt install hailo-all` → 재부팅. `hailo-h10-all`(Hailo-10H용)은 설치하지 않는다(둘은 같이 설치 불가).
+- PCIe Gen 3는 AI HAT+에서만 자동이다. M.2 모듈을 별도 HAT에 꽂는 형태면 `raspi-config` 또는 `dtparam=pciex1_gen=3`으로 켠다.
+- Python: `python3 -m venv --system-site-packages`로 venv를 만든다. picamera2, libcamera, hailo_platform, numpy, OpenCV는 apt 버전을 쓰고 pip로 다시 설치하지 않는다(hailort는 PyPI에 없다).
+- 한 번에 한 프로세스만 카메라와 Hailo를 쓸 수 있다. 데모 프로그램을 끄고 실행한다.
+- PCA9685: `sudo raspi-config nonint do_i2c 0`, `sudo apt install i2c-tools python3-lgpio`, `i2cdetect -y 1`에서 0x40 확인. venv에 `adafruit-circuitpython-servokit` 설치(Pi 5에서는 python3-lgpio 필요). raspi-blinka.py 설치 스크립트는 쓰지 않는다(시스템 전체 업그레이드를 함).
+- 전원: 서보는 PCA9685 V+ 단자에 별도 5~6V 전원을 연결하고 접지는 파이와 공통으로 묶는다. 파이 5V 핀으로 서보를 돌리지 않는다. PCA9685 VCC는 파이 3.3V. 파이는 공식 27W 전원을 쓴다.
+
+## 카메라·코드 메모
+
+- HQ 카메라 기본 케이블은 15핀-15핀이라 Pi 5에 안 맞는다. Standard-Mini(15핀-22핀) 케이블이 필요하다. AI HAT+보다 먼저 연결한다.
+- IMX477 초점거리(6mm 렌즈, 픽셀 1.55µm): 4056 폭에서 약 3871px, 2028 폭에서 약 1935px, 640 폭에서 약 611px. 공식 6mm 렌즈는 3MP급이라 2028×1520 모드가 맞다.
+- IMX477 주요 모드: 4056×3040 10fps, 2028×1520 40fps(2×2 비닝, 전체 화각), 2028×1080 50fps(잘림), 1332×990 120fps(잘림).
+- picamera2에서 센서 모드를 고정한다: `sensor={'output_size': (2028, 1520), 'bit_depth': 12}`. 안 그러면 잘린 모드가 선택될 수 있다.
+- lores는 기본으로 비율을 유지하지 않는다(main의 4:3 화면을 640×640으로 늘림). HEF 입력 크기와 lores 크기, 학습 때 전처리를 일치시킨다. bbox 폭은 x축 배율(2028/640)로 변환한다.
+- picamera2의 'RGB888' 배열은 메모리상 B,G,R 순서다. RGB로 학습한 모델에는 'BGR888'을 쓰거나 맞춰서 학습한다(기기에서 빨간 물체로 확인 필요).
+- main과 lores는 같은 요청에서 받는다(`capture_request()` 후 `make_array('lores')`, `make_array('main')`). 따로 받으면 다른 프레임이 되어 잘라내기가 어긋난다.
+- `picamera2.devices.Hailo` 헬퍼로 HEF를 실행한다. YOLOv8 NMS는 Hailo 칩이 아니라 파이 CPU에서 돈다(HailoRT 후처리). 커스텀 HEF는 nms_postprocess를 넣어 변환해야 박스 목록이 나온다.
+- 코드 구조: 카메라(FrameSource), 탐지(Detector), 크기 분류(SizeClassifier), 서보(Actuator)를 교체 가능한 인터페이스로 만들고, 거리 계산과 작동 판단 로직은 하드웨어 없이 테스트할 수 있게 둔다. PC에서는 녹화 영상 + ONNX + 가짜 서보로 시험한다. 서보는 기본값을 가짜/드라이런으로 둔다.
+- 녹화 영상과 모델 파일(.onnx, .hef)은 git에 올리지 않는다.
 
 ## 미정 사항
 
+- Hailo-8 형태 (AI HAT+ 26 TOPS 보드인지, M.2 모듈 + 별도 HAT인지)
+- 라즈베리파이 5 메모리 용량
+- 파이에 설치될 HailoRT 버전 (4.23 / 4.24 → DFC 버전 결정)
+- ASUS 노트북 RAM 용량, Windows 버전, VMware 리눅스 배포판과 버전 (Ubuntu 22.04/24.04 x86_64여야 함)
 - 서보모터 모델
 - 서보 동작 내용 (지정 각도로 한 번 회전, 팬/틸트 추적 등)
 - 실제로 나타날 드론 기종 범위 (범위가 좁으면 등급을 줄이거나 나눠서 정확도를 올릴 수 있음)
