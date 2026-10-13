@@ -5,15 +5,16 @@
     Q [m³/s] = Q [L/h] / 3.6×10⁶,  V = Q / (π/4·d²),  Re = ρVd/μ
     h_f = f·(L/d)·V²/2g → f = h_f·(d/L)·2g/V²   (f를 Re에 대해 그린다)
 
-d는 측정한 안지름(data.csv의 d_mm), L은 압력 탭 간격(L_mm)이다. L이 없으면 f = (f·L) / L로 출력한다.
+d는 측정한 안지름(data.csv의 d_mm), L은 압력 탭 간격(L_mm, mm 단위)이다. L이 없으면 f = (f·L) / L[m]로 출력한다.
+V1 = V2, K = 0은 두 탭이 같은 지름의 곧은 관에 있을 때만 맞으므로, 지름이 바뀌는 요소의 f는 겉보기 값이다.
 
-사용법:
+사용법 (Windows는 python3 대신 py):
     python3 board.py data.csv
 """
 import math
 import sys
 
-from calc import read_rows
+from calc import read_rows, utf8_output, warn
 
 RHO = 998.0  # kg/m³ (칠판)
 MU = 0.001  # kg/(m·s) (칠판)
@@ -43,9 +44,14 @@ def blasius(re):
 
 
 def main():
+    utf8_output()
     if len(sys.argv) != 2:
         sys.exit(__doc__)
-    rows = [r for r in read_rows(sys.argv[1]) if r["dh_mm"] is not None]
+    rows = read_rows(sys.argv[1])
+    for r in rows:
+        if r["dh_mm"] is None:
+            warn(f"{r['element']} {r['Q_Lph']:g} L/h: 수두차가 없어 건너뜁니다.")
+    rows = [r for r in rows if r["dh_mm"] is not None]
     missing = [r["element"] for r in rows if r["d"] is None]
     if missing:
         sys.exit(f"d_mm(안지름)이 없는 측정: {', '.join(missing)}")
@@ -60,25 +66,29 @@ def main():
         results.append((r, x))
         print(f"## {r['element']} (d = {r['d']:g} mm)")
         print(f"1. Q = {x['Q_Lph']:g} L/h ÷ 3.6×10⁶ = {x['Q']:.4e} m³/s")
-        print(f"2. A = π/4 × d² = π/4 × {x['d']:.3f}² = {x['A']:.4e} m²")
+        print(f"2. A = π/4 × d² = π/4 × {x['d']:.4g}² = {x['A']:.4e} m²")
         print(f"3. V = Q / A = {x['Q']:.4e} / {x['A']:.4e} = {x['V']:.4f} m/s")
-        print(f"4. Re = ρVd/μ = {RHO:g} × {x['V']:.4f} × {x['d']:.3f} / {MU:g} = {x['Re']:,.0f}")
-        print(f"5. ΔP = ρgΔh = {RHO:g} × {G:g} × {x['dh']:.3f} = {x['dP']:,.1f} Pa")
-        print(f"6. h_f = ΔP / ρg = {x['dP']:,.1f} / ({RHO:g} × {G:g}) = {x['hf']:.3f} m")
+        print(f"4. Re = ρVd/μ = {RHO:g} × {x['V']:.4f} × {x['d']:.4g} / {MU:g} = {x['Re']:,.0f}")
+        print(f"5. ΔP = ρgΔh = {RHO:g} × {G:g} × {x['dh']:.4g} = {x['dP']:,.1f} Pa")
+        print(f"6. h_f = ΔP / ρg = {x['dP']:,.1f} / ({RHO:g} × {G:g}) = {x['hf']:.4g} m")
         print(f"7. V²/2g = {x['V']:.4f}² / (2 × {G:g}) = {x['vhead']:.5f} m")
-        line = f"8. f = h_f × (d/L) × 2g/V² = {x['hf']:.3f} × {x['d']:.3f} / ({x['vhead']:.5f} × L) = {x['fL']:.4g} / L[m]"
+        line = (f"8. f = h_f × (d/L) × 2g/V² = {x['hf']:.4g} × {x['d']:.4g} / ({x['vhead']:.5f} × L)"
+                f" = {x['fL']:.4g} / L[m]")
         if x["f"] is not None:
             line += f" = {x['fL']:.4g} / {r['L'] / 1000:g} = {x['f']:.4f}"
         print(line)
-        print(f"   (비교: 매끈한 관 Blasius f = 0.316 Re^-0.25 = {blasius(x['Re']):.4f})\n")
+        if r["element"] == "직관":
+            print(f"   (비교: 매끈한 관 Blasius f = 0.316 Re^-0.25 = {blasius(x['Re']):.4f})\n")
+        else:
+            print("   (지름이 바뀌는 요소라 V1 = V2가 아니다. 이 f는 겉보기 값이다.)\n")
 
     print("## 정리")
-    print("| 요소 | d [m] | Q [m³/s] | V [m/s] | Re | ΔP [Pa] | h_f [m] | f | Blasius f |")
+    print("| 요소 | d [m] | Q [m³/s] | V [m/s] | Re | ΔP [Pa] | h_f [m] | f | Blasius f (직관 비교용) |")
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for r, x in results:
         f = f"{x['f']:.4f}" if x["f"] is not None else f"{x['fL']:.4g} / L[m]"
-        print(f"| {r['element']} | {x['d']:.3f} | {x['Q']:.4e} | {x['V']:.4f} | {x['Re']:,.0f} | "
-              f"{x['dP']:,.1f} | {x['hf']:.3f} | {f} | {blasius(x['Re']):.4f} |")
+        print(f"| {r['element']} | {x['d']:.4g} | {x['Q']:.4e} | {x['V']:.4f} | {x['Re']:,.0f} | "
+              f"{x['dP']:,.1f} | {x['hf']:.4g} | {f} | {blasius(x['Re']):.4f} |")
 
 
 if __name__ == "__main__":

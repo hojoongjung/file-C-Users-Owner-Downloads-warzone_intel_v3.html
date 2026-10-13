@@ -149,4 +149,5 @@
 ## 별도 과제: 관로마찰 실험 (드론 프로젝트와 무관)
 
 - 실험 내용, 장치 치수, 공식, 슬라이드 예시값은 `pipe_friction/README.md`에 정리했다.
-- 사용자가 측정값을 주면 `pipe_friction/data.csv`에 넣는다. 보고서 기본은 칠판(담당 선생님) 방식 `python3 pipe_friction/board.py pipe_friction/data.csv`이고, 슬라이드 방식 K·C는 `calc.py`로 계산한다.
+- 사용자가 측정값을 주면 `pipe_friction/data.csv`에 넣는다. 사용자는 칠판(담당 선생님) 방식 `python3 pipe_friction/board.py pipe_friction/data.csv`으로 계산한다. K·C(속도수두 보정 K로 이론과 비교)는 `calc.py`로 계산한다.
+- 사용자에게 아직 받을 것은 README '보고서에 아직 필요한 것' 목록에 있다(오리피스 데이터, 물 온도, 탭 간격 L, 여러 유량, 영점).

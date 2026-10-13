@@ -1,18 +1,17 @@
 """관로마찰 실험 계산: 측정값 CSV → 유속, Re, 손실계수 K, 마찰계수 f, 유량계수 C.
 
-사용법:
+사용법 (Windows는 python3 대신 py):
     python3 calc.py data.csv --temp 20
     python3 calc.py example_slide.csv --nu 1.00e-6   # 슬라이드 예시 검산
 
 CSV 열: element, Q_Lph, Q_Lpm, D1_mm, D2_mm, d_mm, L_mm, h1_mm, h2_mm, dh_mm, note
     - element: 급확대관, 급축소관, 오리피스관, 벤투리관, 직관
     - 유량은 Q_Lph(L/h) 또는 Q_Lpm(L/min, 유량계의 10~80 눈금) 중 하나를 적는다.
-    - D1_mm, D2_mm(상류, 하류 안지름)을 적으면 GEOMETRY 기본값 대신 쓴다.
-      직관은 D1_mm = 안지름, D2_mm = 탭 간격 L이다. 대신 d_mm, L_mm만 적어도 된다.
+    - D1_mm, D2_mm(상류, 하류 안지름)을 적으면 GEOMETRY 기본값 대신 쓴다. 손글씨 표의 외경/내경과는 다르다.
+    - d_mm(측정한 안지름), L_mm(탭 간격)은 칠판 방식 계산(board.py)에서 쓴다. 직관은 이 두 칸에만 적는다.
     - dh_mm = h1_mm - h2_mm (상류 탭 - 하류 탭). h1, h2를 따로 적으면 dh_mm은 비워도 된다.
       수두차가 아직 없으면 비워 둔다(유속과 Re만 계산).
-    - d_mm(측정한 안지름), L_mm(탭 간격)은 칠판 방식 계산(board.py)에서 쓴다.
-    - '#'으로 시작하는 줄은 주석.
+    - '#'으로 시작하는 줄은 주석. 엑셀에서 저장한 CSV(UTF-8 또는 한글 cp949)도 읽는다.
 """
 import argparse
 import csv
@@ -21,15 +20,18 @@ import sys
 
 G = 9.81  # m/s²
 
-# 장치 안지름 [mm] (슬라이드 '파이프 직경' 표). 교재 표 5-1은 다른 장치 값이라 쓰지 않는다.
+# 장치 지름 [mm] (슬라이드 '파이프 직경' 표, 안지름인지 표시는 없다). 교재 표 5-1은 다른 장치 값이라 쓰지 않는다.
 GEOMETRY = {
     "급확대관": {"D1": 25.0, "D2": 40.0},
     "급축소관": {"D1": 40.0, "D2": 25.0},
     "오리피스관": {"D1": 25.0, "D2": 20.0},
     "벤투리관": {"D1": 32.0, "D2": 20.0},
-    # 직관: D1 = 안지름 D, D2 = 압력 탭 간격 L [mm]. 재서 넣는다.
+    # 직관: 행마다 d_mm(안지름)과 L_mm(압력 탭 간격)을 적는다. 안에서는 D1 = d, D2 = L로 쓴다.
     "직관": {"D1": None, "D2": None},
 }
+
+# 유량계 눈금 범위. 10~80 눈금은 L/min, 옆 눈금은 L/h(60배)다.
+FLOWMETER_LPH = (600, 6000)
 
 # 직관 내벽 절대 조도 [mm]. PVC 같은 플라스틱 관은 약 0.0015mm(매끈한 관에 가깝다).
 ROUGHNESS_MM = 0.0015
@@ -140,44 +142,96 @@ def straight(q, dh, nu, D, L):
 
 
 def cell(r, key):
-    return (r.get(key) or "").strip()
+    value = r.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def warn(message):
+    print(f"주의: {message}", file=sys.stderr)
+
+
+def utf8_output():
+    """한글 Windows에서 결과를 파일로 돌려도(>) 깨지거나 멈추지 않게 한다."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        # 한글 엑셀에서 'CSV(쉼표로 분리)'로 저장하면 cp949가 된다.
+        with open(path, encoding="cp949", newline="") as f:
+            return f.read()
 
 
 def read_rows(path):
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        lines = [line for line in f if line.strip() and not line.lstrip().startswith("#")]
+    lines = [line for line in read_text(path).splitlines(keepends=True)
+             if line.strip() and not line.lstrip().startswith("#")]
+    reader = csv.DictReader(lines)
+    if not reader.fieldnames or "element" not in [h.strip() for h in reader.fieldnames]:
+        sys.exit("CSV 머리글(첫 줄)에 element 열이 없습니다. data.csv의 머리글을 그대로 쓰세요.")
     rows = []
-    for i, r in enumerate(csv.DictReader(lines), start=1):
+    for i, r in enumerate(reader, start=1):
+        r = {(k.strip() if isinstance(k, str) else k): v for k, v in r.items()}
+        if not any(cell(r, k) for k in r if k is not None):
+            continue  # 엑셀이 남긴 빈 줄(,,,,)
         element = normalize(cell(r, "element"))
         if element not in GEOMETRY:
-            sys.exit(f"{i}번째 측정: 알 수 없는 element '{r['element']}'")
-        if cell(r, "Q_Lph"):
-            q_lph = float(r["Q_Lph"])
-        elif cell(r, "Q_Lpm"):
-            q_lph = float(r["Q_Lpm"]) * 60
-        else:
-            sys.exit(f"{i}번째 측정({element}): Q_Lph 또는 Q_Lpm이 필요합니다.")
-        if cell(r, "dh_mm"):
-            dh_mm = float(r["dh_mm"])
-        elif cell(r, "h1_mm") and cell(r, "h2_mm"):
-            dh_mm = float(r["h1_mm"]) - float(r["h2_mm"])
-        else:
-            dh_mm = None
-        d = float(r["d_mm"]) if cell(r, "d_mm") else None
-        L = float(r["L_mm"]) if cell(r, "L_mm") else None
-        D1 = float(r["D1_mm"]) if cell(r, "D1_mm") else GEOMETRY[element]["D1"]
-        D2 = float(r["D2_mm"]) if cell(r, "D2_mm") else GEOMETRY[element]["D2"]
+            sys.exit(f"{i}번째 측정: 알 수 없는 element '{cell(r, 'element')}' (가능: {', '.join(GEOMETRY)})")
+        tag = f"{i}번째 측정({element})"
+        if r.get(None):
+            warn(f"{tag}: 칸이 머리글보다 많습니다. note에 쉼표가 있으면 따옴표로 감싸세요.")
+
+        def num(key):
+            text = cell(r, key)
+            if text in ("", "-"):
+                return None
+            try:
+                return float(text)
+            except ValueError:
+                sys.exit(f"{tag} {key}: 숫자가 아닙니다 ({text!r}).")
+
+        q_lph, q_lpm = num("Q_Lph"), num("Q_Lpm")
+        if q_lph is None and q_lpm is None:
+            sys.exit(f"{tag}: Q_Lph 또는 Q_Lpm이 필요합니다.")
+        if q_lph is not None and q_lpm is not None and abs(q_lph - 60 * q_lpm) > 0.5:
+            warn(f"{tag}: Q_Lph({q_lph:g})와 Q_Lpm({q_lpm:g} → {60 * q_lpm:g} L/h)이 다릅니다. Q_Lph를 씁니다.")
+        q = q_lph if q_lph is not None else 60 * q_lpm
+        if q <= 0:
+            sys.exit(f"{tag}: 유량이 0 이하입니다.")
+        lo, hi = FLOWMETER_LPH
+        if not lo <= q <= hi:
+            hint = " 10~80 눈금 값(V값)이면 Q_Lpm 칸에 적으세요." if q_lph is not None and q < lo else ""
+            warn(f"{tag}: 유량 {q:g} L/h는 유량계 눈금({lo}~{hi} L/h) 밖입니다.{hint}")
+
+        dh_mm, h1, h2 = num("dh_mm"), num("h1_mm"), num("h2_mm")
+        if dh_mm is None and h1 is not None and h2 is not None:
+            dh_mm = h1 - h2
+        elif dh_mm is None and (h1 is None) != (h2 is None):
+            warn(f"{tag}: h1_mm, h2_mm 중 하나만 있어 수두차를 계산하지 않습니다.")
+
+        d, L = num("d_mm"), num("L_mm")
         if element == "직관":
-            # 직관은 D1/D2(calc.py)와 d/L(board.py) 중 어느 쪽으로 적어도 같은 값을 쓴다.
-            D1 = D1 if D1 is not None else d
-            D2 = D2 if D2 is not None else L
-            d = d if d is not None else D1
-            L = L if L is not None else D2
-        if D1 is None or D2 is None:
-            sys.exit(f"{i}번째 측정(직관): 안지름 d_mm과 탭 간격 L_mm을 적어 주세요.")
+            if cell(r, "D1_mm") or cell(r, "D2_mm"):
+                sys.exit(f"{tag}: 직관은 D1_mm/D2_mm 대신 d_mm(안지름)과 L_mm(탭 간격)에 적어 주세요.")
+            if d is None or L is None:
+                sys.exit(f"{tag}: 안지름 d_mm과 탭 간격 L_mm을 적어 주세요.")
+            D1, D2 = d, L
+        else:
+            D1 = num("D1_mm")
+            D2 = num("D2_mm")
+            D1 = GEOMETRY[element]["D1"] if D1 is None else D1
+            D2 = GEOMETRY[element]["D2"] if D2 is None else D2
+            expanding = element == "급확대관"
+            if not (D1 < D2 if expanding else D1 > D2):
+                need = "D1_mm < D2_mm" if expanding else "D1_mm > D2_mm"
+                sys.exit(f"{tag}: {need}이어야 합니다. D1_mm, D2_mm은 상류·하류 안지름이지 손글씨의 외경/내경이 아닙니다.")
         rows.append({
             "element": element,
-            "Q_Lph": q_lph,
+            "Q_Lph": q,
             "dh_mm": dh_mm,
             "D1": D1,
             "D2": D2,
@@ -201,8 +255,9 @@ def table(headers, rows):
 HEADERS = {
     "급확대관": ["V 작은 관 [m/s]", "Re", "h_L 보정 [m]", "h_L 이론 [m]", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
     "급축소관": ["V 작은 관 [m/s]", "Re", "h_L 보정 [m]", "h_L 이론 [m]", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
-    "벤투리관": ["β", "V 목 [m/s]", "Re 목", "입구-목 손실 [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
-    "오리피스관": ["β", "V 목 [m/s]", "Re 목", "Re 관", "입구-목 손실 [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
+    # Δh − (V2² − V1²)/2g = (1 − C²)Δh: 입구~목 사이 값이고, 확산부까지 포함한 영구 손실은 아니다.
+    "벤투리관": ["β", "V 목 [m/s]", "Re 목", "Δh − (V2²−V1²)/2g [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
+    "오리피스관": ["β", "V 목 [m/s]", "Re 목", "Re 관", "Δh − (V2²−V1²)/2g [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
     "직관": ["V [m/s]", "Re", "f 실험", "f 무디"],
 }
 
@@ -236,6 +291,7 @@ def compute(r, nu):
 
 
 def main():
+    utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("csv", help="측정값 CSV")
     ap.add_argument("--temp", type=float, default=20.0, help="물 온도 [°C] (기본 20)")
