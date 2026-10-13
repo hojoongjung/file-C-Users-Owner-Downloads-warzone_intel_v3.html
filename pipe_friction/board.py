@@ -21,18 +21,23 @@ MU = 0.001  # kg/(m·s) (칠판)
 G = 9.81  # m/s² (칠판)
 
 
+def shown(x, spec):
+    """출력에 보이는 자릿수로 반올림한 값. 다음 단계를 이 값으로 계산해야 손으로 검산한 값과 맞는다."""
+    return float(format(x, spec))
+
+
 def board(row):
     d = row["d"] / 1000
     q_lph = row["Q_Lph"]
-    q = q_lph / 3.6e6
-    a = math.pi / 4 * d**2
-    v = q / a
+    q = shown(q_lph / 3.6e6, ".4e")
+    a = shown(math.pi / 4 * d**2, ".4e")
+    v = shown(q / a, ".4f")
     re = RHO * v * d / MU
     dh = row["dh_mm"] / 1000
-    dp = RHO * G * dh
-    hf = dp / (RHO * G)
-    vhead = v**2 / (2 * G)
-    f_l = hf * d / vhead  # f × L [m]
+    dp = shown(RHO * G * dh, ".1f")
+    hf = shown(dp / (RHO * G), ".4g")
+    vhead = shown(v**2 / (2 * G), ".5f")
+    f_l = shown(hf * d / vhead, ".4g")  # f × L [m]
     f = f_l / (row["L"] / 1000) if row["L"] else None
     return {"d": d, "Q_Lph": q_lph, "Q": q, "A": a, "V": v, "Re": re, "dh": dh, "dP": dp,
             "hf": hf, "vhead": vhead, "fL": f_l, "f": f}
@@ -66,13 +71,13 @@ def main():
         results.append((r, x))
         print(f"## {r['element']} (d = {r['d']:g} mm)")
         print(f"1. Q = {x['Q_Lph']:g} L/h ÷ 3.6×10⁶ = {x['Q']:.4e} m³/s")
-        print(f"2. A = π/4 × d² = π/4 × {x['d']:.4g}² = {x['A']:.4e} m²")
+        print(f"2. A = π/4 × d² = π/4 × {x['d']:g}² = {x['A']:.4e} m²")
         print(f"3. V = Q / A = {x['Q']:.4e} / {x['A']:.4e} = {x['V']:.4f} m/s")
-        print(f"4. Re = ρVd/μ = {RHO:g} × {x['V']:.4f} × {x['d']:.4g} / {MU:g} = {x['Re']:,.0f}")
-        print(f"5. ΔP = ρgΔh = {RHO:g} × {G:g} × {x['dh']:.4g} = {x['dP']:,.1f} Pa")
+        print(f"4. Re = ρVd/μ = {RHO:g} × {x['V']:.4f} × {x['d']:g} / {MU:g} = {x['Re']:,.0f}")
+        print(f"5. ΔP = ρgΔh = {RHO:g} × {G:g} × {x['dh']:g} = {x['dP']:,.1f} Pa")
         print(f"6. h_f = ΔP / ρg = {x['dP']:,.1f} / ({RHO:g} × {G:g}) = {x['hf']:.4g} m")
         print(f"7. V²/2g = {x['V']:.4f}² / (2 × {G:g}) = {x['vhead']:.5f} m")
-        line = (f"8. f = h_f × (d/L) × 2g/V² = {x['hf']:.4g} × {x['d']:.4g} / ({x['vhead']:.5f} × L)"
+        line = (f"8. f = h_f × (d/L) × 2g/V² = {x['hf']:.4g} × {x['d']:g} / ({x['vhead']:.5f} × L)"
                 f" = {x['fL']:.4g} / L[m]")
         if x["f"] is not None:
             line += f" = {x['fL']:.4g} / {r['L'] / 1000:g} = {x['f']:.4f}"
@@ -87,8 +92,9 @@ def main():
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for r, x in results:
         f = f"{x['f']:.4f}" if x["f"] is not None else f"{x['fL']:.4g} / L[m]"
-        print(f"| {r['element']} | {x['d']:.4g} | {x['Q']:.4e} | {x['V']:.4f} | {x['Re']:,.0f} | "
-              f"{x['dP']:,.1f} | {x['hf']:.4g} | {f} | {blasius(x['Re']):.4f} |")
+        bl = f"{blasius(x['Re']):.4f}" if r["element"] == "직관" else "—"
+        print(f"| {r['element']} | {x['d']:g} | {x['Q']:.4e} | {x['V']:.4f} | {x['Re']:,.0f} | "
+              f"{x['dP']:,.1f} | {x['hf']:.4g} | {f} | {bl} |")
 
 
 if __name__ == "__main__":

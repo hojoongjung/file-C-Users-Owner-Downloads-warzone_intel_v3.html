@@ -30,8 +30,8 @@ GEOMETRY = {
     "직관": {"D1": None, "D2": None},
 }
 
-# 유량계 눈금 범위. 10~80 눈금은 L/min, 옆 눈금은 L/h(60배)다.
-FLOWMETER_LPH = (600, 6000)
+# 유량계 눈금 범위. 10~80 눈금은 L/min, 옆 눈금은 L/h(60배, 600~5000)다.
+FLOWMETER_LPH = (600, 5000)
 
 # 직관 내벽 절대 조도 [mm]. PVC 같은 플라스틱 관은 약 0.0015mm(매끈한 관에 가깝다).
 ROUGHNESS_MM = 0.0015
@@ -136,7 +136,7 @@ def straight(q, dh, nu, D, L):
     v = q / area(D)
     re = v * D / 1000 / nu
     res = {"V": v, "Re": re, "f_moody": 64 / re if re < 2300 else colebrook(re, ROUGHNESS_MM / D)}
-    if dh is not None:
+    if dh is not None and L:
         res["f"] = dh * (D / L) * 2 * G / v**2
     return res
 
@@ -162,27 +162,31 @@ def read_text(path):
         with open(path, encoding="utf-8-sig", newline="") as f:
             return f.read()
     except UnicodeDecodeError:
+        pass
+    try:
         # 한글 엑셀에서 'CSV(쉼표로 분리)'로 저장하면 cp949가 된다.
         with open(path, encoding="cp949", newline="") as f:
             return f.read()
+    except UnicodeDecodeError:
+        sys.exit(f"{path}: CSV 텍스트로 읽을 수 없습니다. 엑셀에서 'CSV UTF-8' 또는 'CSV(쉼표로 분리)'로 저장하세요(.xlsx는 못 읽습니다).")
 
 
 def read_rows(path):
-    lines = [line for line in read_text(path).splitlines(keepends=True)
-             if line.strip() and not line.lstrip().startswith("#")]
-    reader = csv.DictReader(lines)
+    # (파일 줄 번호, 줄). 주석과 빈 줄, 엑셀이 남긴 쉼표만 있는 줄은 뺀다.
+    numbered = [(n, line) for n, line in enumerate(read_text(path).splitlines(keepends=True), start=1)
+                if line.replace(",", "").strip() and not line.lstrip().startswith("#")]
+    reader = csv.DictReader(line for _, line in numbered)
     if not reader.fieldnames or "element" not in [h.strip() for h in reader.fieldnames]:
         sys.exit("CSV 머리글(첫 줄)에 element 열이 없습니다. data.csv의 머리글을 그대로 쓰세요.")
     rows = []
-    for i, r in enumerate(reader, start=1):
+    for r in reader:
+        i = numbered[reader.line_num - 1][0]
         r = {(k.strip() if isinstance(k, str) else k): v for k, v in r.items()}
-        if not any(cell(r, k) for k in r if k is not None):
-            continue  # 엑셀이 남긴 빈 줄(,,,,)
         element = normalize(cell(r, "element"))
         if element not in GEOMETRY:
-            sys.exit(f"{i}번째 측정: 알 수 없는 element '{cell(r, 'element')}' (가능: {', '.join(GEOMETRY)})")
-        tag = f"{i}번째 측정({element})"
-        if r.get(None):
+            sys.exit(f"{i}번째 줄: 알 수 없는 element '{cell(r, 'element')}' (가능: {', '.join(GEOMETRY)})")
+        tag = f"{i}번째 줄({element})"
+        if any(isinstance(v, str) and v.strip() for v in r.get(None) or []):
             warn(f"{tag}: 칸이 머리글보다 많습니다. note에 쉼표가 있으면 따옴표로 감싸세요.")
 
         def num(key):
@@ -190,9 +194,12 @@ def read_rows(path):
             if text in ("", "-"):
                 return None
             try:
-                return float(text)
+                value = float(text)
             except ValueError:
+                value = math.nan
+            if not math.isfinite(value):
                 sys.exit(f"{tag} {key}: 숫자가 아닙니다 ({text!r}).")
+            return value
 
         q_lph, q_lpm = num("Q_Lph"), num("Q_Lpm")
         if q_lph is None and q_lpm is None:
@@ -204,7 +211,11 @@ def read_rows(path):
             sys.exit(f"{tag}: 유량이 0 이하입니다.")
         lo, hi = FLOWMETER_LPH
         if not lo <= q <= hi:
-            hint = " 10~80 눈금 값(V값)이면 Q_Lpm 칸에 적으세요." if q_lph is not None and q < lo else ""
+            hint = ""
+            if q_lph is not None and q < lo:
+                hint = " 10~80 눈금 값(V값)이면 Q_Lpm 칸에 적으세요."
+            elif q_lph is None and q > hi:
+                hint = " L/h 눈금 값이면 Q_Lph 칸에 적으세요."
             warn(f"{tag}: 유량 {q:g} L/h는 유량계 눈금({lo}~{hi} L/h) 밖입니다.{hint}")
 
         dh_mm, h1, h2 = num("dh_mm"), num("h1_mm"), num("h2_mm")
@@ -212,13 +223,18 @@ def read_rows(path):
             dh_mm = h1 - h2
         elif dh_mm is None and (h1 is None) != (h2 is None):
             warn(f"{tag}: h1_mm, h2_mm 중 하나만 있어 수두차를 계산하지 않습니다.")
+        elif dh_mm is not None and h1 is not None and h2 is not None and abs(dh_mm - (h1 - h2)) > 0.5:
+            warn(f"{tag}: dh_mm({dh_mm:g})과 h1_mm − h2_mm({h1 - h2:g})이 다릅니다. dh_mm을 씁니다.")
 
         d, L = num("d_mm"), num("L_mm")
+        for key, value in (("d_mm", d), ("L_mm", L), ("D1_mm", num("D1_mm")), ("D2_mm", num("D2_mm"))):
+            if value is not None and value <= 0:
+                sys.exit(f"{tag} {key}: 0보다 커야 합니다.")
         if element == "직관":
-            if cell(r, "D1_mm") or cell(r, "D2_mm"):
+            if num("D1_mm") is not None or num("D2_mm") is not None:
                 sys.exit(f"{tag}: 직관은 D1_mm/D2_mm 대신 d_mm(안지름)과 L_mm(탭 간격)에 적어 주세요.")
-            if d is None or L is None:
-                sys.exit(f"{tag}: 안지름 d_mm과 탭 간격 L_mm을 적어 주세요.")
+            if d is None:
+                sys.exit(f"{tag}: 안지름 d_mm을 적어 주세요.")
             D1, D2 = d, L
         else:
             D1 = num("D1_mm")
@@ -256,7 +272,7 @@ HEADERS = {
     "급확대관": ["V 작은 관 [m/s]", "Re", "h_L 보정 [m]", "h_L 이론 [m]", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
     "급축소관": ["V 작은 관 [m/s]", "Re", "h_L 보정 [m]", "h_L 이론 [m]", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
     # Δh − (V2² − V1²)/2g = (1 − C²)Δh: 입구~목 사이 값이고, 확산부까지 포함한 영구 손실은 아니다.
-    "벤투리관": ["β", "V 목 [m/s]", "Re 목", "Δh − (V2²−V1²)/2g [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
+    "벤투리관": ["β", "V 목 [m/s]", "Re 목", "Re 관", "Δh − (V2²−V1²)/2g [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
     "오리피스관": ["β", "V 목 [m/s]", "Re 목", "Re 관", "Δh − (V2²−V1²)/2g [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
     "직관": ["V [m/s]", "Re", "f 실험", "f 무디"],
 }
@@ -279,7 +295,7 @@ def compute(r, nu):
                 fmt(res.get("K_corr"), ".3f"), fmt(res["K_th"], ".3f")]
     if element == "벤투리관":
         res = flowmeter(q, dh, nu, D1, D2)
-        return [fmt(res["beta"], ".3f"), fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"),
+        return [fmt(res["beta"], ".3f"), fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"), fmt(res["Re_pipe"], ".0f"),
                 fmt(res.get("hL"), ".4f"), fmt(res.get("Q_th"), ".3e"), fmt(res.get("C"), ".3f"), fmt(venturi_c_theory(res["beta"]), ".3f")]
     if element == "오리피스관":
         res = flowmeter(q, dh, nu, D1, D2)
@@ -320,7 +336,7 @@ def main():
         out = []
         for r in group:
             q = r["Q_Lph"] / 1000 / 3600
-            dims = f"{r['D1']:g}, {r['D2']:g}" if element == "직관" else f"{r['D1']:g} → {r['D2']:g}"
+            dims = f"{r['D1']:g}, {fmt(r['D2'], 'g')}" if element == "직관" else f"{r['D1']:g} → {r['D2']:g}"
             out.append([f"{r['Q_Lph']:g}", f"{q:.3e}", dims, fmt(r["dh_mm"], "g")] + compute(r, nu) + [r["note"]])
         print(f"## {element}")
         print(table(head, out))
