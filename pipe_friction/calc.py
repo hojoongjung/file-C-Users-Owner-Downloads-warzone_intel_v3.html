@@ -71,9 +71,11 @@ def expansion(q, dh, nu, d, D):
     """급확대관 d → D. 기준 속도는 작은 관(상류) 속도."""
     v1, v2 = q / area(d), q / area(D)
     res = {"V": v1, "Re": v1 * d / 1000 / nu, "K_th": (1 - (d / D) ** 2) ** 2}
+    res["hL_th"] = res["K_th"] * v1**2 / (2 * G)
     if dh is not None:
+        res["hL_corr"] = dh + (v1**2 - v2**2) / (2 * G)
         res["K_slide"] = dh * 2 * G / v1**2
-        res["K_corr"] = (dh + (v1**2 - v2**2) / (2 * G)) * 2 * G / v1**2
+        res["K_corr"] = res["hL_corr"] * 2 * G / v1**2
     return res
 
 
@@ -81,9 +83,11 @@ def contraction(q, dh, nu, D, d):
     """급축소관 D → d. 기준 속도는 작은 관(하류) 속도."""
     v1, v2 = q / area(D), q / area(d)
     res = {"V": v2, "Re": v2 * d / 1000 / nu, "K_th": 0.42 * (1 - (d / D) ** 2)}
+    res["hL_th"] = res["K_th"] * v2**2 / (2 * G)
     if dh is not None:
+        res["hL_corr"] = dh + (v1**2 - v2**2) / (2 * G)
         res["K_slide"] = dh * 2 * G / v2**2
-        res["K_corr"] = (dh + (v1**2 - v2**2) / (2 * G)) * 2 * G / v2**2
+        res["K_corr"] = res["hL_corr"] * 2 * G / v2**2
     return res
 
 
@@ -95,6 +99,7 @@ def flowmeter(q, dh, nu, D1, D2):
     if dh is not None:
         res["Q_th"] = a2 / math.sqrt(1 - (a2 / a1) ** 2) * math.sqrt(2 * G * dh) if dh > 0 else float("nan")
         res["C"] = q / res["Q_th"]
+        res["hL"] = dh - (v2**2 - v1**2) / (2 * G)
     return res
 
 
@@ -182,10 +187,10 @@ def table(headers, rows):
 
 
 HEADERS = {
-    "급확대관": ["V 작은 관 [m/s]", "Re", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
-    "급축소관": ["V 작은 관 [m/s]", "Re", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
-    "벤투리관": ["β", "V 목 [m/s]", "Re 목", "Q이론 [m³/s]", "C 실험", "C 이론"],
-    "오리피스관": ["β", "V 목 [m/s]", "Re 목", "Re 관", "Q이론 [m³/s]", "C 실험", "C 이론"],
+    "급확대관": ["V 작은 관 [m/s]", "Re", "h_L 보정 [m]", "h_L 이론 [m]", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
+    "급축소관": ["V 작은 관 [m/s]", "Re", "h_L 보정 [m]", "h_L 이론 [m]", "K 슬라이드식", "K 속도수두 보정", "K 이론"],
+    "벤투리관": ["β", "V 목 [m/s]", "Re 목", "입구-목 손실 [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
+    "오리피스관": ["β", "V 목 [m/s]", "Re 목", "Re 관", "입구-목 손실 [m]", "Q이론 [m³/s]", "C 실험", "C 이론"],
     "직관": ["V [m/s]", "Re", "f 실험", "f 무디"],
 }
 
@@ -197,20 +202,22 @@ def compute(r, nu):
     dh = None if r["dh_mm"] is None else r["dh_mm"] / 1000
     if element == "급확대관":
         res = expansion(q, dh, nu, D1, D2)
-        return [fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"), fmt(res.get("K_slide"), ".3f"),
+        return [fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"), fmt(res.get("hL_corr"), ".4f"),
+                fmt(res["hL_th"], ".4f"), fmt(res.get("K_slide"), ".3f"),
                 fmt(res.get("K_corr"), ".3f"), fmt(res["K_th"], ".3f")]
     if element == "급축소관":
         res = contraction(q, dh, nu, D1, D2)
-        return [fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"), fmt(res.get("K_slide"), ".3f"),
+        return [fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"), fmt(res.get("hL_corr"), ".4f"),
+                fmt(res["hL_th"], ".4f"), fmt(res.get("K_slide"), ".3f"),
                 fmt(res.get("K_corr"), ".3f"), fmt(res["K_th"], ".3f")]
     if element == "벤투리관":
         res = flowmeter(q, dh, nu, D1, D2)
         return [fmt(res["beta"], ".3f"), fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"),
-                fmt(res.get("Q_th"), ".3e"), fmt(res.get("C"), ".3f"), fmt(venturi_c_theory(res["beta"]), ".3f")]
+                fmt(res.get("hL"), ".4f"), fmt(res.get("Q_th"), ".3e"), fmt(res.get("C"), ".3f"), fmt(venturi_c_theory(res["beta"]), ".3f")]
     if element == "오리피스관":
         res = flowmeter(q, dh, nu, D1, D2)
         return [fmt(res["beta"], ".3f"), fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"), fmt(res["Re_pipe"], ".0f"),
-                fmt(res.get("Q_th"), ".3e"), fmt(res.get("C"), ".3f"),
+                fmt(res.get("hL"), ".4f"), fmt(res.get("Q_th"), ".3e"), fmt(res.get("C"), ".3f"),
                 fmt(orifice_c_theory(res["beta"], res["Re_pipe"]), ".3f")]
     res = straight(q, dh, nu, D1, D2)
     return [fmt(res["V"], ".3f"), fmt(res["Re"], ".0f"), fmt(res.get("f"), ".4f"), fmt(res["f_moody"], ".4f")]
