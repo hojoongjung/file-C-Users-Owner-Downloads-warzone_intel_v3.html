@@ -4,12 +4,13 @@
     python3 calc.py data.csv --temp 20
     python3 calc.py example_slide.csv --nu 1.00e-6   # 슬라이드 예시 검산
 
-CSV 열: element, Q_Lph, Q_Lpm, D1_mm, D2_mm, h1_mm, h2_mm, dh_mm, note
+CSV 열: element, Q_Lph, Q_Lpm, D1_mm, D2_mm, d_mm, L_mm, h1_mm, h2_mm, dh_mm, note
     - element: 급확대관, 급축소관, 오리피스관, 벤투리관, 직관
     - 유량은 Q_Lph(L/h) 또는 Q_Lpm(L/min, 유량계의 10~80 눈금) 중 하나를 적는다.
     - D1_mm, D2_mm(상류, 하류 안지름)을 적으면 GEOMETRY 기본값 대신 쓴다. 직관은 D1_mm = 안지름, D2_mm = 탭 간격 L.
     - dh_mm = h1_mm - h2_mm (상류 탭 - 하류 탭). h1, h2를 따로 적으면 dh_mm은 비워도 된다.
       수두차가 아직 없으면 비워 둔다(유속과 Re만 계산).
+    - d_mm(측정한 안지름), L_mm(탭 간격)은 칠판 방식 계산(board.py)에서 쓴다.
     - '#'으로 시작하는 줄은 주석.
 """
 import argparse
@@ -171,6 +172,8 @@ def read_rows(path):
             "dh_mm": dh_mm,
             "D1": D1,
             "D2": D2,
+            "d": float(r["d_mm"]) if cell(r, "d_mm") else None,
+            "L": float(r["L_mm"]) if cell(r, "L_mm") else None,
             "note": cell(r, "note"),
         })
     return rows
