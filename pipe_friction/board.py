@@ -76,7 +76,7 @@ def main():
     print("| 요소 | d [m] | Q [m³/s] | V [m/s] | Re | ΔP [Pa] | h_f [m] | f | Blasius f |")
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for r, x in results:
-        f = f"{x['f']:.4f}" if x["f"] is not None else f"{x['fL']:.4g} / L"
+        f = f"{x['f']:.4f}" if x["f"] is not None else f"{x['fL']:.4g} / L[m]"
         print(f"| {r['element']} | {x['d']:.3f} | {x['Q']:.4e} | {x['V']:.4f} | {x['Re']:,.0f} | "
               f"{x['dP']:,.1f} | {x['hf']:.3f} | {f} | {blasius(x['Re']):.4f} |")
 

@@ -7,7 +7,8 @@
 CSV 열: element, Q_Lph, Q_Lpm, D1_mm, D2_mm, d_mm, L_mm, h1_mm, h2_mm, dh_mm, note
     - element: 급확대관, 급축소관, 오리피스관, 벤투리관, 직관
     - 유량은 Q_Lph(L/h) 또는 Q_Lpm(L/min, 유량계의 10~80 눈금) 중 하나를 적는다.
-    - D1_mm, D2_mm(상류, 하류 안지름)을 적으면 GEOMETRY 기본값 대신 쓴다. 직관은 D1_mm = 안지름, D2_mm = 탭 간격 L.
+    - D1_mm, D2_mm(상류, 하류 안지름)을 적으면 GEOMETRY 기본값 대신 쓴다.
+      직관은 D1_mm = 안지름, D2_mm = 탭 간격 L이다. 대신 d_mm, L_mm만 적어도 된다.
     - dh_mm = h1_mm - h2_mm (상류 탭 - 하류 탭). h1, h2를 따로 적으면 dh_mm은 비워도 된다.
       수두차가 아직 없으면 비워 둔다(유속과 Re만 계산).
     - d_mm(측정한 안지름), L_mm(탭 간격)은 칠판 방식 계산(board.py)에서 쓴다.
@@ -162,18 +163,26 @@ def read_rows(path):
             dh_mm = float(r["h1_mm"]) - float(r["h2_mm"])
         else:
             dh_mm = None
+        d = float(r["d_mm"]) if cell(r, "d_mm") else None
+        L = float(r["L_mm"]) if cell(r, "L_mm") else None
         D1 = float(r["D1_mm"]) if cell(r, "D1_mm") else GEOMETRY[element]["D1"]
         D2 = float(r["D2_mm"]) if cell(r, "D2_mm") else GEOMETRY[element]["D2"]
+        if element == "직관":
+            # 직관은 D1/D2(calc.py)와 d/L(board.py) 중 어느 쪽으로 적어도 같은 값을 쓴다.
+            D1 = D1 if D1 is not None else d
+            D2 = D2 if D2 is not None else L
+            d = d if d is not None else D1
+            L = L if L is not None else D2
         if D1 is None or D2 is None:
-            sys.exit(f"{i}번째 측정(직관): D1_mm(안지름)과 D2_mm(탭 간격 L)을 적어 주세요.")
+            sys.exit(f"{i}번째 측정(직관): 안지름 d_mm과 탭 간격 L_mm을 적어 주세요.")
         rows.append({
             "element": element,
             "Q_Lph": q_lph,
             "dh_mm": dh_mm,
             "D1": D1,
             "D2": D2,
-            "d": float(r["d_mm"]) if cell(r, "d_mm") else None,
-            "L": float(r["L_mm"]) if cell(r, "L_mm") else None,
+            "d": d,
+            "L": L,
             "note": cell(r, "note"),
         })
     return rows
@@ -238,9 +247,13 @@ def main():
         print("측정값이 아직 없습니다.")
         return
 
-    rho, mu = water_props(args.temp)
-    nu = args.nu if args.nu else mu / rho
-    print(f"물 {args.temp:g}°C: ρ = {rho:.1f} kg/m³, μ = {mu:.3e} Pa·s, ν = {nu:.3e} m²/s\n")
+    if args.nu:
+        nu = args.nu
+        print(f"ν = {nu:.3e} m²/s (직접 지정)\n")
+    else:
+        rho, mu = water_props(args.temp)
+        nu = mu / rho
+        print(f"물 {args.temp:g}°C: ρ = {rho:.1f} kg/m³, μ = {mu:.3e} Pa·s, ν = {nu:.3e} m²/s\n")
 
     for element in GEOMETRY:
         group = [r for r in rows if r["element"] == element]
