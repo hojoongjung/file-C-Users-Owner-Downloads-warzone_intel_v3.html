@@ -145,3 +145,8 @@
 - 실제로 나타날 드론 기종 범위 (범위가 좁으면 등급을 줄이거나 나눠서 정확도를 올릴 수 있음)
 - 등급별 학습 데이터 확보 방법
 - 초소형(A1/A2) 탐지를 위해 타일 탐지를 쓸지
+
+## 별도 과제: 관로마찰 실험 (드론 프로젝트와 무관)
+
+- 실험 내용, 장치 치수, 공식, 슬라이드 예시값은 `pipe_friction/README.md`에 정리했다.
+- 사용자가 측정값을 주면 `pipe_friction/data.csv`에 넣고 `python3 pipe_friction/calc.py pipe_friction/data.csv --temp <물 온도>`로 계산한다.
